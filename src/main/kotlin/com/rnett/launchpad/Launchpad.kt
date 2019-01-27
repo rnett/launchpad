@@ -29,7 +29,7 @@ suspend inline fun <E> ReceiveChannel<E>.consumeEach(
 
         val workers = MutableList(min(maxConcurrency, initialConcurrency)) {
             launch {
-                while (true) {
+                while (isActive && !(isClosedForReceive && isEmpty)) {
                     busy.incrementAndGet()
                     action(this@consumeEach.receive())
                     busy.decrementAndGet()
@@ -38,27 +38,26 @@ suspend inline fun <E> ReceiveChannel<E>.consumeEach(
         }
 
         if (maxConcurrency > initialConcurrency || maxConcurrency <= 0) {
-            while (this.isActive) {
-                if (busy.get() == workers.size && (workers.size < maxConcurrency || maxConcurrency <= 0)) {
-                    val recieved = receive()
+            while (isActive && !(isClosedForReceive && isEmpty) && (workers.size < maxConcurrency || maxConcurrency <= 0)) {
+                if (busy.get() == workers.size) {
+                    val received = receive()
 
                     workers += launch {
                         busy.incrementAndGet()
-                        action(recieved)
+                        action(received)
                         busy.decrementAndGet()
 
-                        while (true) {
+                        while (isActive && !(isClosedForReceive && isEmpty)) {
                             busy.incrementAndGet()
                             action(this@consumeEach.receive())
                             busy.decrementAndGet()
                         }
                     }
-
-                    println("Added worker: at ${workers.size}")
                 }
                 delay(10)
             }
         }
+
         workers.joinAll()
     }
 

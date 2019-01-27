@@ -24,3 +24,27 @@ tasks.withType<KotlinCompile> {
     kotlinOptions.jvmTarget = "1.8"
 }
 
+val sourcesJar by tasks.creating(Jar::class) {
+    classifier = "sources"
+    from(java.sourceSets["main"].allSource)
+}
+
+artifacts.add("archives", sourcesJar)
+
+publishing {
+    publications {
+        create("default", MavenPublication::class.java) {
+            from(components["java"])
+            artifact(sourcesJar)
+        }
+        create("mavenJava", MavenPublication::class.java) {
+            from(components["java"])
+            artifact(sourcesJar)
+        }
+    }
+    repositories {
+        maven {
+            url = uri("$buildDir/repository")
+        }
+    }
+}

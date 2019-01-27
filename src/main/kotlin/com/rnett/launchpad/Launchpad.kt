@@ -2,48 +2,103 @@ package com.rnett.launchpad
 
 import kotlinx.coroutines.*
 import kotlinx.coroutines.channels.Channel
-import kotlinx.coroutines.channels.Channel.Factory.UNLIMITED
+import kotlinx.coroutines.channels.ReceiveChannel
 import kotlinx.coroutines.channels.actor
-import kotlinx.coroutines.channels.consumeEach
+import kotlinx.coroutines.channels.sendBlocking
 import java.util.concurrent.atomic.AtomicInteger
 import kotlin.coroutines.CoroutineContext
+import kotlin.coroutines.EmptyCoroutineContext
+import kotlin.math.min
 
-class Launchpad<R>(val limit: Int, override val coroutineContext: CoroutineContext = Dispatchers.Default) :
-    CoroutineScope {
+suspend inline fun <E> ReceiveChannel<E>.consumeEach(
+    maxConcurrency: Int,
+    initialConcurrency: Int = 10,
+    coroutineContext: CoroutineContext = EmptyCoroutineContext,
+    crossinline action: suspend (E) -> Unit
+) =
+    withContext(coroutineContext) {
 
-    private val waiting = actor<suspend () -> R>(start = CoroutineStart.LAZY) {
-        val runningCount = AtomicInteger(0)
+        if (maxConcurrency <= 0)
+            if (initialConcurrency > maxConcurrency)
+                throw IllegalArgumentException("initialConcurrency must be less than or equal to maxConcurrency")
+            else if (initialConcurrency < 0)
+                throw IllegalArgumentException("Can not have a negative initialConcurrency")
 
-        consumeEach {
-            while (runningCount.get() >= limit && limit > 0) {
+
+        val busy = AtomicInteger(0)
+
+        val workers = MutableList(min(maxConcurrency, initialConcurrency)) {
+            launch {
+                while (true) {
+                    busy.incrementAndGet()
+                    action(this@consumeEach.receive())
+                    busy.decrementAndGet()
+                }
             }
-            runningCount.incrementAndGet()
-            resulter.send(async {
-                val r = it()
-                runningCount.decrementAndGet()
-                r
-            })
+        }
+
+        if (maxConcurrency > initialConcurrency || maxConcurrency <= 0) {
+            while (this.isActive) {
+                if (busy.get() == workers.size && (workers.size < maxConcurrency || maxConcurrency <= 0)) {
+                    val recieved = receive()
+
+                    workers += launch {
+                        busy.incrementAndGet()
+                        action(recieved)
+                        busy.decrementAndGet()
+
+                        while (true) {
+                            busy.incrementAndGet()
+                            action(this@consumeEach.receive())
+                            busy.decrementAndGet()
+                        }
+                    }
+
+                    println("Added worker: at ${workers.size}")
+                }
+                delay(10)
+            }
+        }
+        workers.joinAll()
+    }
+
+
+class Launchpad<R>(
+    val limit: Int,
+    val initialConcurrency: Int = limit,
+    override val coroutineContext: CoroutineContext = Dispatchers.Default
+) : CoroutineScope {
+
+    private val used = AtomicInteger(0)
+
+    private val waiting = actor<suspend () -> R>(capacity = Channel.UNLIMITED, start = CoroutineStart.LAZY) {
+        consumeEach(limit, initialConcurrency) {
+            resulter.send(it())
+
+            used.decrementAndGet()
         }
     }
 
-    private val resulter = Channel<Deferred<R>>(capacity = UNLIMITED)
+    private val resulter = Channel<R>(capacity = Channel.UNLIMITED)
 
     suspend fun closeAndGetResults(): List<R> {
-        val result = mutableListOf<Deferred<R>>()
+        val result = mutableListOf<R>()
 
-        while (waiting.isFull) {
+        while (waiting.isFull || used.get() > 0) {
         }
 
         while (!(resulter.isEmpty)) {
-            result += resulter.receive()
+            val r = resulter.receive()
+            result += r
         }
         waiting.close()
         resulter.close()
-        return result.awaitAll()
+        return result
     }
 
-    fun add(block: suspend () -> R) = launch {
-        waiting.send(block)
+    fun add(block: suspend () -> R) {
+        used.incrementAndGet()
+        waiting.sendBlocking(block)
     }
 
     operator fun invoke(block: suspend () -> R) = add(block)
@@ -71,3 +126,20 @@ inline fun <T, R, Resource> Iterable<T>.doWithLimitedResource(
 ) =
     doWithLimitedResource(limit, this, resourceBuilder, action)
 
+fun main() {
+    val launchpad = Launchpad<Int>(15, 5)
+    (1..100).forEach {
+        launchpad {
+            println(it)
+            delay(1000)
+            it
+        }
+    }
+
+    println("Launching done")
+
+    runBlocking {
+        //delay(1000 * 20)
+        println("Size: " + launchpad.closeAndGetResults().size)
+    }
+}

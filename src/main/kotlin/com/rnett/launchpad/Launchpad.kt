@@ -124,21 +124,3 @@ inline fun <T, R, Resource> Iterable<T>.doWithLimitedResource(
     crossinline action: (Resource, T) -> R
 ) =
     doWithLimitedResource(limit, this, resourceBuilder, action)
-
-fun main() {
-    val launchpad = Launchpad<Int>(15, 5)
-    (1..100).forEach {
-        launchpad {
-            println(it)
-            delay(1000)
-            it
-        }
-    }
-
-    println("Launching done")
-
-    runBlocking {
-        //delay(1000 * 20)
-        println("Size: " + launchpad.closeAndGetResults().size)
-    }
-}

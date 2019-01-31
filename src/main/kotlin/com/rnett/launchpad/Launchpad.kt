@@ -1,8 +1,8 @@
 package com.rnett.launchpad
 
+import kotlinx.atomicfu.atomic
 import kotlinx.coroutines.*
 import kotlinx.coroutines.channels.*
-import java.util.concurrent.atomic.AtomicInteger
 import kotlin.coroutines.CoroutineContext
 import kotlin.coroutines.EmptyCoroutineContext
 import kotlin.math.min
@@ -23,7 +23,7 @@ suspend inline fun <E> ReceiveChannel<E>.consumeEach(
                 throw IllegalArgumentException("Can not have a negative initialConcurrency")
 
 
-        val busy = AtomicInteger(0)
+        val busy = atomic(0)
 
         val workers = MutableList(min(maxConcurrency, initialConcurrency)) {
             launch {
@@ -37,7 +37,7 @@ suspend inline fun <E> ReceiveChannel<E>.consumeEach(
 
         if (maxConcurrency > initialConcurrency || maxConcurrency <= 0) {
             while (isActive && !(isClosedForReceive && isEmpty) && (workers.size < maxConcurrency || maxConcurrency <= 0)) {
-                if (busy.get() == workers.size) {
+                if (busy.value == workers.size) {
                     val received = receive()
 
                     workers += launch {
@@ -90,7 +90,7 @@ inline fun <E, R> ReceiveChannel<E>.map(
 
 private data class RunwayLaunch<R>(val block: suspend () -> R, val result: CompletableDeferred<R>)
 
-class Launchpad<R>(
+open class Launchpad<R>(
     val limit: Int,
     val initialConcurrency: Int = limit,
     val launchStep: Int = 1,
@@ -113,7 +113,6 @@ class Launchpad<R>(
     operator fun invoke(block: suspend () -> R) = queueLaunch(block)
 }
 
-@InternalCoroutinesApi
 inline fun <T, R, Resource> doWithLimitedResource(
     limit: Int, data: Iterable<T>,
     crossinline resourceBuilder: () -> Resource,
@@ -129,40 +128,9 @@ inline fun <T, R, Resource> doWithLimitedResource(
 
 }
 
-@InternalCoroutinesApi
 inline fun <T, R, Resource> Iterable<T>.doWithLimitedResource(
     limit: Int,
     crossinline resourceBuilder: () -> Resource,
     crossinline action: (Resource, T) -> R
 ) =
     doWithLimitedResource(limit, this, resourceBuilder, action)
-
-/*
-@InternalCoroutinesApi
-fun main() {
-    val launchpad = Launchpad<Int>(10)
-
-    runBlocking {
-        (1..100).map { i ->
-            launchpad {
-                println(i)
-                delay(1000)
-                i
-            }.let {
-                    println("Done: ${it.await()}")
-            }
-        }
-    }
-
-
-    println("\n")
-
-    runBlocking {
-        val r = launchpad.closeAndGetResults()
-
-        println(r)
-        println("Size: ${r.size}")
-        println("Sum: ${r.sum()}, should be ${(1..100).sum()}")
-    }
-
-}*/

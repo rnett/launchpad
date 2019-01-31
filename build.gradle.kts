@@ -1,8 +1,21 @@
 import org.jetbrains.kotlin.gradle.tasks.KotlinCompile
 
+buildscript {
+
+    val atomicfu_version = "0.12.1"
+
+    dependencies {
+        classpath("org.jetbrains.kotlinx:atomicfu-gradle-plugin:$atomicfu_version")
+    }
+}
+
 plugins {
     kotlin("jvm") version "1.3.20"
     `maven-publish`
+}
+
+apply {
+    plugin("kotlinx-atomicfu")
 }
 
 group = "com.rnett.launchpad"
@@ -14,10 +27,14 @@ repositories {
 }
 
 val coroutines_version = "1.1.1"
+val atomicfu_version = "0.12.1"
 
 dependencies {
     implementation(kotlin("stdlib-jdk8"))
+    implementation(kotlin("reflect"))
+
     api("org.jetbrains.kotlinx:kotlinx-coroutines-core:$coroutines_version")
+    implementation("org.jetbrains.kotlinx:atomicfu:$atomicfu_version")
 }
 
 tasks.withType<KotlinCompile> {

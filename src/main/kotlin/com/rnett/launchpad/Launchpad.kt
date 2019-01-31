@@ -97,24 +97,20 @@ class Launchpad<R>(
     override val coroutineContext: CoroutineContext = Dispatchers.Default
 ) : CoroutineScope {
 
-    private val used = AtomicInteger(0)
-
     private val actionQueue = actor<RunwayLaunch<R>>(capacity = Channel.UNLIMITED) {
         this@actor.consumeEach(limit, initialConcurrency, launchStep, this@Launchpad.coroutineContext) {
             val result = it.block()
             it.result.complete(result)
-            used.decrementAndGet()
         }
     }
 
-    fun add(block: suspend () -> R): Deferred<R> {
-        used.incrementAndGet()
+    fun queueLaunch(block: suspend () -> R): Deferred<R> {
         val result = CompletableDeferred<R>()
         actionQueue.sendBlocking(RunwayLaunch(block, result))
         return result
     }
 
-    operator fun invoke(block: suspend () -> R) = add(block)
+    operator fun invoke(block: suspend () -> R) = queueLaunch(block)
 }
 
 @InternalCoroutinesApi

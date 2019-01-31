@@ -1,10 +1,7 @@
 package com.rnett.launchpad
 
 import kotlinx.coroutines.*
-import kotlinx.coroutines.channels.Channel
-import kotlinx.coroutines.channels.ReceiveChannel
-import kotlinx.coroutines.channels.actor
-import kotlinx.coroutines.channels.sendBlocking
+import kotlinx.coroutines.channels.*
 import java.util.concurrent.atomic.AtomicInteger
 import kotlin.coroutines.CoroutineContext
 import kotlin.coroutines.EmptyCoroutineContext
@@ -13,6 +10,7 @@ import kotlin.math.min
 suspend inline fun <E> ReceiveChannel<E>.consumeEach(
     maxConcurrency: Int,
     initialConcurrency: Int = 10,
+    launchStep: Int = 1,
     coroutineContext: CoroutineContext = EmptyCoroutineContext,
     crossinline action: suspend (E) -> Unit
 ) =
@@ -53,6 +51,21 @@ suspend inline fun <E> ReceiveChannel<E>.consumeEach(
                             busy.decrementAndGet()
                         }
                     }
+
+                    for (i in (1..launchStep)) {
+
+                        if (workers.size >= maxConcurrency && maxConcurrency > 0)
+                            break
+
+                        workers += launch {
+                            while (isActive && !(isClosedForReceive && isEmpty)) {
+                                busy.incrementAndGet()
+                                action(this@consumeEach.receive())
+                                busy.decrementAndGet()
+                            }
+                        }
+                    }
+
                 }
                 delay(10)
             }
@@ -61,66 +74,99 @@ suspend inline fun <E> ReceiveChannel<E>.consumeEach(
         workers.joinAll()
     }
 
+inline fun <E, R> ReceiveChannel<E>.map(
+    maxConcurrency: Int,
+    initialConcurrency: Int = 10,
+    launchStep: Int = 1,
+    coroutineContext: CoroutineContext = EmptyCoroutineContext,
+    crossinline transform: suspend (E) -> R
+) =
+    GlobalScope.produce(coroutineContext) {
+        this@map.consumeEach(maxConcurrency, initialConcurrency, launchStep, coroutineContext) {
+            val r = transform(it)
+            this.send(r)
+        }
+    }
+
+private data class RunwayLaunch<R>(val block: suspend () -> R, val result: CompletableDeferred<R>)
 
 class Launchpad<R>(
     val limit: Int,
     val initialConcurrency: Int = limit,
+    val launchStep: Int = 1,
     override val coroutineContext: CoroutineContext = Dispatchers.Default
 ) : CoroutineScope {
 
     private val used = AtomicInteger(0)
 
-    private val waiting = actor<suspend () -> R>(capacity = Channel.UNLIMITED, start = CoroutineStart.LAZY) {
-        consumeEach(limit, initialConcurrency) {
-            resulter.send(it())
-
+    private val actionQueue = actor<RunwayLaunch<R>>(capacity = Channel.UNLIMITED) {
+        this@actor.consumeEach(limit, initialConcurrency, launchStep, this@Launchpad.coroutineContext) {
+            val result = it.block()
+            it.result.complete(result)
             used.decrementAndGet()
         }
     }
 
-    private val resulter = Channel<R>(capacity = Channel.UNLIMITED)
-
-    suspend fun closeAndGetResults(): List<R> {
-        val result = mutableListOf<R>()
-
-        while (waiting.isFull || used.get() > 0) {
-        }
-
-        while (!(resulter.isEmpty)) {
-            val r = resulter.receive()
-            result += r
-        }
-        waiting.close()
-        resulter.close()
-        return result
-    }
-
-    fun add(block: suspend () -> R) {
+    fun add(block: suspend () -> R): Deferred<R> {
         used.incrementAndGet()
-        waiting.sendBlocking(block)
+        val result = CompletableDeferred<R>()
+        actionQueue.sendBlocking(RunwayLaunch(block, result))
+        return result
     }
 
     operator fun invoke(block: suspend () -> R) = add(block)
 }
 
+@InternalCoroutinesApi
 inline fun <T, R, Resource> doWithLimitedResource(
     limit: Int, data: Iterable<T>,
     crossinline resourceBuilder: () -> Resource,
     crossinline action: (Resource, T) -> R
-): Launchpad<R> {
+): List<Deferred<R>> {
     val launchpad = Launchpad<R>(limit)
-    data.forEach {
+    return data.map {
         launchpad {
             val resource = resourceBuilder()
             action(resource, it)
         }
     }
-    return launchpad
+
 }
 
+@InternalCoroutinesApi
 inline fun <T, R, Resource> Iterable<T>.doWithLimitedResource(
     limit: Int,
     crossinline resourceBuilder: () -> Resource,
     crossinline action: (Resource, T) -> R
 ) =
     doWithLimitedResource(limit, this, resourceBuilder, action)
+
+/*
+@InternalCoroutinesApi
+fun main() {
+    val launchpad = Launchpad<Int>(10)
+
+    runBlocking {
+        (1..100).map { i ->
+            launchpad {
+                println(i)
+                delay(1000)
+                i
+            }.let {
+                    println("Done: ${it.await()}")
+            }
+        }
+    }
+
+
+    println("\n")
+
+    runBlocking {
+        val r = launchpad.closeAndGetResults()
+
+        println(r)
+        println("Size: ${r.size}")
+        println("Sum: ${r.sum()}, should be ${(1..100).sum()}")
+    }
+
+}*/

@@ -1,8 +1,8 @@
 package com.rnett.launchpad
 
-import kotlinx.atomicfu.atomic
 import kotlinx.coroutines.*
 import kotlinx.coroutines.channels.*
+import java.util.concurrent.atomic.AtomicInteger
 import kotlin.coroutines.CoroutineContext
 import kotlin.coroutines.EmptyCoroutineContext
 import kotlin.math.min
@@ -23,7 +23,7 @@ suspend inline fun <E> ReceiveChannel<E>.consumeEach(
                 throw IllegalArgumentException("Can not have a negative initialConcurrency")
 
 
-        val busy = atomic(0)
+        val busy = AtomicInteger(0)
 
         val workers = MutableList(min(maxConcurrency, initialConcurrency)) {
             launch {
@@ -37,7 +37,7 @@ suspend inline fun <E> ReceiveChannel<E>.consumeEach(
 
         if (maxConcurrency > initialConcurrency || maxConcurrency <= 0) {
             while (isActive && !(isClosedForReceive && isEmpty) && (workers.size < maxConcurrency || maxConcurrency <= 0)) {
-                if (busy.value == workers.size) {
+                if (busy.get() == workers.size) {
                     val received = receive()
 
                     workers += launch {
